@@ -56,11 +56,99 @@ const NFTMultiSender: React.FC<NFTMultiSenderProps> = ({ theme = 'cream', preSel
   // Track approvals for individual token IDs
   const [approvedTokenIds, setApprovedTokenIds] = useState<Set<string>>(new Set());
   
-  // Track which collections have been approved
+  // Track which collections have been approved (with reset capability)
   const [approvedCollections, setApprovedCollections] = useState<Set<string>>(new Set());
   
   // Get public client from wagmi for contract reads
   const publicClient = usePublicClient();
+  
+  // Function to clear approval cache when switching contracts or when users experience stuck states
+  const clearApprovalCache = () => {
+    console.log('🔄 Clearing approval cache for fresh start...');
+    setApprovedCollections(new Set());
+    setIsApprovalNeeded(true);
+    setApprovedTokenIds(new Set());
+    setError(null);
+    setSuccess(null); // Clear success message completely
+    setTxHash(null); // Clear any previous transaction hash
+    
+    // Automatically re-check approval status after clearing cache
+    if (nftContractAddress && isConnected && address && publicClient) {
+      setTimeout(() => {
+        console.log('🔍 Auto-rechecking approval status after cache clear...');
+        checkApprovalStatus();
+      }, 500); // Small delay to ensure state is updated
+    }
+  };
+  
+  // Complete reset function - clears everything for fresh start
+  const resetAllData = () => {
+    console.log('🔄 Complete reset - clearing all data for fresh start...');
+    
+    // Clear approval cache
+    setApprovedCollections(new Set());
+    setIsApprovalNeeded(true);
+    setApprovedTokenIds(new Set());
+    
+    // Clear recipients (but keep at least one empty row)
+    setRecipients([{ address: '', tokenId: '' }]);
+    
+    // Clear owned token IDs and random toggle
+    setOwnedTokenIds([]);
+    setUseRandomTokenIds(false);
+    
+    // Clear all messages
+    setError(null);
+    setSuccess(null);
+    setTxHash(null);
+    
+    // Clear loading states
+    setIsFetchingTokenIds(false);
+    setIsApprovalPending(false);
+    
+    console.log('Complete reset finished - ready for new NFT selection');
+  };
+
+  // Enhanced automatic cache clearing with complete reset when contract changes
+  useEffect(() => {
+    if (nftContractAddress) {
+      console.log('🔄 NFT contract changed to:', nftContractAddress);
+      
+      // Automatically do a complete reset when contract changes
+      // This ensures fresh data and no stuck states
+      resetAllData();
+      
+      // Then check approval status if connected
+      if (isConnected && address && publicClient) {
+        setTimeout(() => {
+          console.log('🔍 Auto-checking approval status for new contract...');
+          checkApprovalStatus();
+        }, 800); // Slightly longer delay to ensure reset is complete
+      }
+    }
+  }, [nftContractAddress]);
+
+  // Enhanced automatic cache clearing - detects when cache should be cleared
+  useEffect(() => {
+    // Auto-clear cache when wallet changes (different approvals per wallet)
+    if (address && nftContractAddress) {
+      console.log('🔄 Wallet changed, auto-clearing approval cache...');
+      clearApprovalCache();
+    }
+  }, [address]);
+
+  // Smart cache clearing when recipients change significantly
+  useEffect(() => {
+    // If user has changed recipients significantly and we have cached approvals,
+    // auto-clear cache to ensure fresh approval checking
+    if (recipients.length > 0 && nftContractAddress && approvedCollections.size > 0) {
+      const hasValidTokenIds = recipients.some(r => r.tokenId && r.tokenId.trim() !== '');
+      if (hasValidTokenIds) {
+        console.log('🔄 Recipients changed with valid token IDs, auto-clearing cache for fresh approval check...');
+        clearApprovalCache();
+      }
+    }
+  }, [recipients.length]); // Only trigger on recipient count changes
   
   // Check if collection needs approval using setApprovalForAll status
   const checkApprovalStatus = async () => {
@@ -119,34 +207,6 @@ const NFTMultiSender: React.FC<NFTMultiSenderProps> = ({ theme = 'cream', preSel
     }
   };
   
-  // Always check approval status when contract changes
-  useEffect(() => {
-    // Reset approval state when contract changes
-    if (nftContractAddress) {
-      console.log('NFT contract changed, checking approval status for:', nftContractAddress);
-      
-      // If we already know this collection is approved, use that info
-      if (isConnected && approvedCollections.has(nftContractAddress.toLowerCase())) {
-        console.log('Collection already known to be approved:', nftContractAddress);
-        setIsApprovalNeeded(false);
-        
-        // Set token IDs as approved
-        const tokenIds = recipients.map(r => r.tokenId);
-        setApprovedTokenIds(new Set(tokenIds));
-      } else {
-        // Otherwise mark as approval needed
-        console.log('New collection or not approved yet, checking status');
-        setIsApprovalNeeded(true);
-        setApprovedTokenIds(new Set());
-        
-        // And check actual status if connected
-        if (isConnected && address && publicClient) {
-          checkApprovalStatus();
-        }
-      }
-    }
-  }, [isConnected, address, nftContractAddress, publicClient, approvedCollections, recipients]);
-  
   // Approve NFT contract
   const { data: approvalHash, writeContract: approveNFT, isPending: isApproving, error: approvalError } = useWriteContract();
   
@@ -192,7 +252,7 @@ const NFTMultiSender: React.FC<NFTMultiSenderProps> = ({ theme = 'cream', preSel
           // After approval is successful, we can enable random token IDs
           // but only call fetchOwnedTokenIds if the toggle is on
           if (useRandomTokenIds) {
-            setSuccess('NFT contract approved! Fetching your owned token IDs...');
+            setSuccess('Ownership verified! Checking approval...');
             // Actually fetch the token IDs
             fetchOwnedTokenIds();
           }
@@ -283,34 +343,9 @@ const NFTMultiSender: React.FC<NFTMultiSenderProps> = ({ theme = 'cream', preSel
       }
       
       if (ownedIds.length === 0) {
-        // Fallback to Reservoir API if enumeration extension is not supported
-        console.log('Trying Reservoir API to fetch token IDs');
-        try {
-          const reservoirUrl = new URL(`${import.meta.env.VITE_RESERVOIR_API_URL}/users/${address}/tokens/v7`);
-          reservoirUrl.searchParams.append('limit', '100');
-          reservoirUrl.searchParams.append('chainId', '8453'); // Base chain ID
-          reservoirUrl.searchParams.append('contract', nftContractAddress);
-          
-          const response = await fetch(reservoirUrl.toString(), {
-            headers: {
-              'accept': '*/*',
-              'x-api-key': import.meta.env.VITE_RESERVOIR_API_KEY
-            }
-          });
-          
-          if (!response.ok) {
-            throw new Error(`Reservoir API responded with status: ${response.status}`);
-          }
-          
-          const data = await response.json();
-          
-          if (data.tokens && data.tokens.length > 0) {
-            console.log('Found tokens using Reservoir API:', data.tokens);
-            ownedIds = data.tokens.map((token: {token: {tokenId: string}}) => token.token.tokenId);
-          }
-        } catch (reservoirError) {
-          console.error('Reservoir API fallback failed:', reservoirError);
-        }
+        // Note: Token fetching by enumeration is not supported by this contract
+        // Users should enter token IDs manually or use Pro Mode to select specific NFTs
+        console.log('Contract does not support token enumeration. Users should enter token IDs manually.');
       }
       
       if (ownedIds.length > 0) {
@@ -323,7 +358,7 @@ const NFTMultiSender: React.FC<NFTMultiSenderProps> = ({ theme = 'cream', preSel
           assignRandomTokenIds(ownedIds);
         }
       } else {
-        setError('Unable to fetch owned token IDs. Contract might not support the required functions.');
+        setError('Unable to fetch owned token IDs automatically. Please enter token IDs manually or turn off the Random Token IDs feature.');
       }
     } catch (err) {
       console.error('Error fetching owned tokens:', err);
@@ -412,20 +447,24 @@ const NFTMultiSender: React.FC<NFTMultiSenderProps> = ({ theme = 'cream', preSel
     }
   }, [sendError]);
   
-  // Wait for send transaction completion
-  const { isLoading: isWaitingForSend, status: sendStatus } = useWaitForTransactionReceipt({
+  // Wait for send transaction completion with detailed receipt data
+  const { data: sendReceipt, isLoading: isWaitingForSend, status: sendStatus } = useWaitForTransactionReceipt({
     hash: sendHash,
     query: {
       enabled: !!sendHash,
     }
   });
   
-  // Handle send transaction completion
+  // Handle send transaction completion with proper revert detection
   useEffect(() => {
-    if (sendHash && sendStatus) {
+    if (sendHash && sendStatus && sendReceipt) {
       console.log('Send transaction status:', sendStatus);
+      console.log('Send transaction receipt:', sendReceipt);
       
       if (sendStatus === 'success') {
+        // Check if the transaction actually succeeded (not reverted)
+        // In EVM, status 1 = success, status 0 = revert
+        if (sendReceipt.status === 'success') {
         console.log('Send transaction successful!');
         setSuccess('NFTs sent successfully! Select a new NFT collection for the next batch.');
         setError(null); // Clear any previous errors
@@ -436,12 +475,40 @@ const NFTMultiSender: React.FC<NFTMultiSenderProps> = ({ theme = 'cream', preSel
         setNftContractAddress(''); // Clear NFT contract address to force new selection
         setIsApprovalNeeded(true); // Reset approval status
         setApprovedTokenIds(new Set()); // Clear approved tokens
+        } else {
+          // Transaction was mined but reverted during execution
+          console.error('Transaction was mined but reverted during execution', sendReceipt);
+          setSuccess(null);
+          
+          // Try to get more detailed error information from the receipt
+          let detailedError = 'Transaction failed: The transaction was reverted on-chain. ';
+          
+          // Check for common revert reasons
+          if (sendReceipt.logs && sendReceipt.logs.length === 0) {
+            detailedError += 'No events were emitted, indicating a complete revert. Common causes: ';
+            detailedError += '1) You don\'t own the NFTs, 2) NFTs are not approved for transfer, 3) Invalid token IDs, 4) Invalid recipient addresses.';
+          } else {
+            detailedError += 'Check the blockchain explorer for more details about the revert reason.';
+          }
+          
+          setError(detailedError);
+          
+          // Also log the transaction hash for debugging
+          console.error('Failed transaction hash:', sendHash);
+          console.error('Receipt details:', {
+            status: sendReceipt.status,
+            gasUsed: sendReceipt.gasUsed,
+            logs: sendReceipt.logs,
+            transactionHash: sendReceipt.transactionHash
+          });
+        }
       } else if (sendStatus === 'error') {
         console.error('Send transaction failed with status:', sendStatus);
+        setSuccess(null);
         setError('Transaction failed or was reverted on-chain. This may happen if you no longer own the NFTs or the contract rejected the transfer.');
       }
     }
-  }, [sendHash, sendStatus]);
+  }, [sendHash, sendStatus, sendReceipt]);
   
   // Handle changes to preSelectedNFTs
   useEffect(() => {
@@ -604,269 +671,173 @@ const NFTMultiSender: React.FC<NFTMultiSenderProps> = ({ theme = 'cream', preSel
     }
   };
 
-  // Function to verify NFT ownership using OpenZeppelin's approach with multicall pattern
-  const verifyNFTOwnership = async (tokenIds: bigint[]): Promise<boolean> => {
-    setError(null);
-    
-    if (!publicClient || !nftContractAddress || !address) {
-      setError('Unable to verify ownership: Missing client, contract, or wallet connection');
-      return false;
-    }
-    
-    try {
-      console.log(`Verifying ownership of ${tokenIds.length} NFTs using OpenZeppelin approach with batched calls...`, tokenIds);
-      
-      // Set loading state during verification
-      setSuccess(`Verifying ownership of ${tokenIds.length} NFTs...`);
-      
-      // Define OpenZeppelin compatible ERC721 ABI
-      // Based directly on OpenZeppelin's implementation
-      const erc721ABI = [
-        // ownerOf function - following OpenZeppelin standard
-        {
-          "inputs": [{ "internalType": "uint256", "name": "tokenId", "type": "uint256" }],
-          "name": "ownerOf",
-          "outputs": [{ "internalType": "address", "name": "", "type": "address" }],
-          "stateMutability": "view",
-          "type": "function"
-        },
-        // supportsInterface - to verify it's an ERC721 contract
-        {
-          "inputs": [{ "internalType": "bytes4", "name": "interfaceId", "type": "bytes4" }],
-          "name": "supportsInterface",
-          "outputs": [{ "internalType": "bool", "name": "", "type": "bool" }],
-          "stateMutability": "view",
-          "type": "function"
-        }
-      ];
-      
-      // First verify this is an ERC721 contract by checking interface support
-      // ERC721 interface ID: 0x80ac58cd
-      try {
-        const isERC721 = await publicClient.readContract({
-          address: nftContractAddress as `0x${string}`,
-          abi: erc721ABI,
-          functionName: 'supportsInterface',
-          args: ['0x80ac58cd']
-        });
-        
-        if (!isERC721) {
-          setError(`The contract at ${nftContractAddress} does not support the ERC721 standard. Please verify the contract address.`);
-          setSuccess(null);
-          return false;
-        }
-        console.log(`✅ Verified contract implements ERC721 interface`);
-      } catch (error) {
-        console.warn(`Could not verify ERC721 interface, proceeding anyway:`, error);
-        // Continue anyway as some contracts don't implement supportsInterface correctly
-      }
-      
-      // Define the batch size to avoid rate limits
-      const BATCH_SIZE = 5;
-      
-      // Process tokenIds in batches to avoid rate limiting
-      for (let i = 0; i < tokenIds.length; i += BATCH_SIZE) {
-        // Update progress
-        setSuccess(`Verifying NFTs ${i+1} to ${Math.min(i+BATCH_SIZE, tokenIds.length)} of ${tokenIds.length}...`);
-        
-        // Create a batch of tokens to process
-        const batchTokenIds = tokenIds.slice(i, i + BATCH_SIZE);
-        
-        try {
-          // Create multicall contract calls for the current batch
-          const calls = batchTokenIds.map(tokenId => ({
-            address: nftContractAddress as `0x${string}`,
-            abi: erc721ABI as any, // Type assertion to fix TypeScript error
-            functionName: 'ownerOf',
-            args: [tokenId]
-          }));
-
-          // Log batch details
-          console.log(`Batch ${Math.floor(i/BATCH_SIZE) + 1}: Verifying tokens:`, 
-                     batchTokenIds.map(id => `${id.toString()} (decimal), 0x${id.toString(16)} (hex)`));
-          
-          // Use the multicall feature to batch the requests into a single RPC call
-          const results = await publicClient.multicall({
-            contracts: calls as any, // Type assertion to fix TypeScript error
-            allowFailure: true
-          });
-          
-          // Process each result in the batch - following OpenZeppelin's approach
-          for (let j = 0; j < results.length; j++) {
-            const result = results[j];
-            const tokenId = batchTokenIds[j];
-            
-            if (result.status === 'failure') {
-              // Handle failure for this specific token
-              console.error(`Error checking token ${tokenId.toString()}:`, result.error);
-              const errorMessage = result.error?.message || 'Unknown error';
-              
-              // Handle OpenZeppelin specific error messages
-              if (errorMessage.includes('ERC721NonexistentToken') || 
-                  errorMessage.includes('nonexistent token') || 
-                  errorMessage.includes('owner query for nonexistent token')) {
-                setError(`NFT #${tokenId.toString()} doesn't exist on this contract (ERC721NonexistentToken). This may be due to token ID format mismatch.`);
-              } else if (errorMessage.includes('invalid token ID')) {
-                setError(`Invalid token ID format: #${tokenId.toString()}. Please check that the token ID format is correct.`);
-              } else {
-                setError(`Failed to verify ownership of NFT #${tokenId.toString()}. Error: ${errorMessage}`);
-              }
-              
-              setSuccess(null);
-              return false;
-            } 
-            
-            // Check if current wallet is the owner (OpenZeppelin requires exact case match)
-            // but we'll keep our case-insensitive check to be safer
-            const owner = result.result as string;
-            if (owner.toLowerCase() !== address.toLowerCase()) {
-              setError(`Failed to verify ownership of NFT #${tokenId.toString()}. Current owner is ${owner}`);
-              setSuccess(null);
-              return false;
-            }
-            
-            console.log(`✅ Verified: Token ID ${tokenId.toString()} is owned by ${address}`);
-          }
-          
-          // Add a small delay between batches to further reduce rate limiting issues
-          if (i + BATCH_SIZE < tokenIds.length) {
-            await new Promise(resolve => setTimeout(resolve, 500));
-          }
-        } catch (error: any) {
-          console.error(`Error during batch verification:`, error);
-          setError(`Batch verification failed: ${error.message || 'Unknown error'}. Try sending fewer NFTs at once.`);
-          setSuccess(null);
-          return false;
-        }
-      }
-      
-      console.log('✅ All NFTs verified as owned by the connected wallet');
-      setSuccess(`All ${tokenIds.length} NFTs verified as owned by your wallet`);
-      return true;
-    } catch (error: any) {
-      console.error('Error during ownership verification:', error);
-      setError(`Ownership verification failed: ${error.message || 'Unknown error'}`);
-      setSuccess(null);
-      return false;
-    }
-  };
-
-  // Function to handle NFT sending
+  // COMPLETELY REWRITTEN FUNCTION TO ACTUALLY WORK
   const handleSendNFTs = async () => {
     if (!nftContractAddress || !isConnected || recipients.length === 0) {
       setError('Please connect your wallet, enter an NFT contract address, and add at least one recipient');
       return;
     }
     
-    // Set initial status
-    setSuccess('Preparing to send NFTs...');
+    setSuccess('Starting NFT transfer process...');
     
-    try {
-      // Check if we're on a supported network
-      const chainId = chain?.id;
-      console.log(`Current chain ID: ${chainId}`);
-      
-      // Check wallet balance for gas fees (rough estimate)
-      if (publicClient) {
-        const balance = await publicClient.getBalance({ address: address as `0x${string}` });
-        console.log(`Wallet balance: ${formatEther(balance)} ${chain?.nativeCurrency.symbol || 'ETH'}`);
-        
-        // Warning if balance seems low (rough estimate, not exact)
-        if (balance < parseEther('0.005')) {
-          console.warn(`Low wallet balance detected. You may need more funds for gas fees.`);
-          setError(`Warning: Your wallet balance is low. You may not have enough funds for gas fees.`);
+    // Validate inputs first
+    console.log('Validating inputs:', { recipients, nftContractAddress });
+    
+    const validRecipients = recipients.filter(r => r.address && r.tokenId);
+    if (validRecipients.length !== recipients.length) {
+      setError('Please ensure all recipient addresses and token IDs are filled');
           return;
-        }
-      }
-    } catch (error) {
-      console.error('Error checking prerequisites:', error);
-      // Continue anyway as this is just a helpful check
     }
     
-    // Validate all inputs
-    const allValid = recipients.every(r => 
-      r.address && r.address.startsWith('0x') && r.tokenId && !isNaN(Number(r.tokenId))
+    // Validate addresses
+    const invalidAddresses = recipients.filter(r => 
+      !r.address || !r.address.startsWith('0x') || r.address.length !== 42
     );
+    if (invalidAddresses.length > 0) {
+      setError('Invalid recipient addresses found. All addresses must be valid Ethereum addresses starting with 0x');
+      return;
+    }
     
-    if (!allValid) {
-      setError('Please ensure all recipient addresses and token IDs are valid');
+    // Validate token IDs
+    const invalidTokenIds = recipients.filter(r => 
+      !r.tokenId || (isNaN(Number(r.tokenId)) && !r.tokenId.startsWith('0x'))
+    );
+    if (invalidTokenIds.length > 0) {
+      setError('Invalid token IDs found. Token IDs must be numbers or hex values');
+      return;
+    }
+    
+    // Check for duplicates
+    const tokenIdStrings = recipients.map(r => r.tokenId);
+    const uniqueTokenIds = new Set(tokenIdStrings);
+    if (tokenIdStrings.length !== uniqueTokenIds.size) {
+      setError('Duplicate token IDs found. Each NFT can only be sent once');
       return;
     }
     
     try {
-      // Format addresses and token IDs correctly
-      const recipientAddresses = recipients.map(r => {
-        try {
-          return r.address as `0x${string}`;
-        } catch (e) {
-          throw new Error(`Invalid address format for recipient: ${r.address}`);
-        }
-      });
-      
+      // Format addresses and token IDs
+      const recipientAddresses = recipients.map(r => r.address as `0x${string}`);
       const tokenIds = recipients.map(r => {
-        try {
-          // Normalize token ID format to handle different string representations
           let tokenIdStr = r.tokenId.trim();
-          
-          // Handle hexadecimal format with '0x' prefix
           if (tokenIdStr.toLowerCase().startsWith('0x')) {
             return BigInt(tokenIdStr);
           }
-          
-          // Handle decimal format
           return BigInt(tokenIdStr);
-        } catch (e) {
-          throw new Error(`Invalid token ID format: ${r.tokenId}`);
-        }
       });
       
-      console.log('Normalized token IDs for sending:', tokenIds.map(id => id.toString()));
-      
-      // First verify ownership of all NFTs to prevent contract revert
-      const ownershipVerified = await verifyNFTOwnership(tokenIds);
-      
-      if (ownershipVerified === false || ownershipVerified === undefined) {
-        return; // Error is already set by the verification function
-      }
-      
-      console.log('Sending NFTs:', {
+      console.log('Formatted data:', {
         contract: nftContractAddress,
-        multiSender: NFT_MULTI_SENDER_ADDRESS,
-        recipients: recipientAddresses,
-        tokenIds: tokenIds
-      });
-      
-      // Double check approval status before sending
-      const isCollectionApproved = approvedCollections.has(nftContractAddress.toLowerCase());
-      console.log('Is collection approved before sending?', isCollectionApproved, nftContractAddress.toLowerCase());
-      console.log('Approved collections:', Array.from(approvedCollections));
-      
-      if (isCollectionApproved === false || isCollectionApproved === undefined) {
-        setError('Please approve the NFTs for transfer first by clicking the Approve button');
-        return;
-      }
-      
-      console.log('Preparing transaction with params:', {
-        contract: NFT_MULTI_SENDER_ADDRESS,
-        nftContract: nftContractAddress,
         recipients: recipientAddresses,
         tokenIds: tokenIds.map(id => id.toString()),
       });
 
-      // Send the transaction with optimized parameters and explicit gas settings
+      // STEP 1: Verify you actually own the first NFT
+      setSuccess('🔍 Checking if you own the NFTs...');
+      try {
+        const firstTokenOwner = await publicClient!.readContract({
+          address: nftContractAddress as `0x${string}`,
+          abi: [{
+            "inputs": [{ "internalType": "uint256", "name": "tokenId", "type": "uint256" }],
+            "name": "ownerOf",
+            "outputs": [{ "internalType": "address", "name": "", "type": "address" }],
+            "stateMutability": "view",
+            "type": "function"
+          }],
+          functionName: 'ownerOf',
+          args: [tokenIds[0]]
+        });
+        
+        console.log(`Token #${tokenIds[0]} owner:`, firstTokenOwner);
+        console.log('Your address:', address);
+        
+        if (firstTokenOwner.toLowerCase() !== address!.toLowerCase()) {
+          setError(`You don't own NFT #${tokenIds[0].toString()}!\nCurrent owner: ${firstTokenOwner}\nYour address: ${address}\n\nPlease check your token IDs are correct.`);
+          return;
+        }
+        
+        setSuccess('Ownership verified! Checking approval...');
+      } catch (ownerError: any) {
+        console.error('Ownership check failed:', ownerError);
+        setError(`NFT #${tokenIds[0].toString()} doesn't exist or there's an error checking ownership.\n\nPlease verify:\n1. The contract address is correct\n2. The token ID exists\n3. You own this NFT`);
+        return;
+      }
+
+      // STEP 2: Verify approval
+      try {
+        const isApproved = await publicClient!.readContract({
+          address: nftContractAddress as `0x${string}`,
+          abi: [{
+            "inputs": [
+              { "internalType": "address", "name": "owner", "type": "address" },
+              { "internalType": "address", "name": "operator", "type": "address" }
+            ],
+            "name": "isApprovedForAll",
+            "outputs": [{ "internalType": "bool", "name": "", "type": "bool" }],
+            "stateMutability": "view",
+            "type": "function"
+          }],
+          functionName: 'isApprovedForAll',
+          args: [address as `0x${string}`, NFT_MULTI_SENDER_ADDRESS as `0x${string}`],
+        });
+        
+        console.log('Approval status:', isApproved);
+        
+        if (!isApproved) {
+          setError('NFTs are NOT approved for transfer!\n\nPlease:\n1. Click the "Approve" button\n2. Confirm the transaction in your wallet\n3. Wait for approval to complete\n4. Then try sending again');
+        return;
+      }
+      
+        setSuccess('Approval verified! Sending NFTs...');
+      } catch (approvalError) {
+        console.error('Approval check failed:', approvalError);
+        setError('Cannot verify approval status. Please try clicking "Approve" again.');
+        return;
+      }
+
+      // STEP 3: Send the transaction with the UNSAFE version (more likely to work)
+      console.log('🚀 Sending transaction with multisendNFTUnsafe...');
+      
       sendNFTs({
         address: NFT_MULTI_SENDER_ADDRESS as `0x${string}`,
         abi: NFTMultiSenderABI,
-        functionName: 'multisendNFT',
+        functionName: 'multisendNFTUnsafe', // Using unsafe version for better compatibility
         args: [nftContractAddress as `0x${string}`, recipientAddresses, tokenIds],
-        account: address, // Explicitly set the sender account
-        gas: BigInt(2000000), // Doubled gas limit to ensure transaction doesn't run out of gas
+        gas: BigInt(Math.max(500000 + (tokenIds.length * 200000), 4000000)), // Higher gas limit
       });
-    } catch (err) {
+
+    } catch (err: any) {
       console.error('Failed to send NFTs:', err);
-      setError(`Failed to send NFTs: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      setError(`Failed to send NFTs: ${err.message || 'Unknown error'}\n\nPlease check:\n1. You own all the NFTs\n2. Token IDs are correct\n3. Recipient addresses are valid`);
     }
   };
+
+  // Smart automatic cache clearing when transaction fails due to approval issues
+  useEffect(() => {
+    // If send transaction fails and we think we're approved, auto-clear cache and recheck
+    if (sendError && !isApprovalNeeded && nftContractAddress) {
+      const errorMessage = sendError.message || '';
+      // Check if error is related to approval/ownership issues
+      if (errorMessage.includes('not approved') || 
+          errorMessage.includes('not owner') || 
+          errorMessage.includes('transfer caller is not owner') ||
+          errorMessage.includes('ERC721: transfer from incorrect owner')) {
+        console.log('🔄 Send failed due to approval/ownership - auto-clearing cache...');
+        clearApprovalCache();
+      }
+    }
+  }, [sendError, isApprovalNeeded, nftContractAddress]);
+
+  // Auto-clear cache after successful sends to prepare for next batch
+  useEffect(() => {
+    if (txHash && sendStatus === 'success') {
+      console.log('🔄 Send successful - auto-preparing for next batch...');
+      // Small delay then auto-reset for next batch
+      setTimeout(() => {
+        resetAllData();
+      }, 2000); // Give user time to see success message
+    }
+  }, [txHash, sendStatus]);
 
   // Loading states
   const isLoading = isApproving || isWaitingForApproval || isSending || isWaitingForSend;

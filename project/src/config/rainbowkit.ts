@@ -1,7 +1,7 @@
 import '@rainbow-me/rainbowkit/styles.css';
 
 import { RainbowKitProvider, getDefaultConfig } from '@rainbow-me/rainbowkit';
-import { WagmiConfig } from 'wagmi';
+import { WagmiProvider } from 'wagmi';
 import { base, mainnet } from 'wagmi/chains';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http } from 'viem'
@@ -22,4 +22,4 @@ export const wagmiConfig = getDefaultConfig({
 
 export const queryClient = new QueryClient();
 
-export { WagmiConfig, RainbowKitProvider, QueryClientProvider };
+export { WagmiProvider, RainbowKitProvider, QueryClientProvider };

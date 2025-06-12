@@ -30,14 +30,22 @@ export function MobileMenu({ isOpen, onClose, onNavigate, currentPage, theme, to
             <X size={24} />
           </button>
           <div className="mt-12 space-y-6 px-2">
-            <button 
-              onClick={() => handleNavigate('multisender')}
-              className={`w-full text-left px-4 py-3 rounded-2xl transition-all duration-200 hover:scale-105 ${currentPage === 'multisender' 
-                ? theme === 'cream' ? 'bg-bronze-500 text-cream-50' : 'bg-baseBlue-600 text-white'
-                : theme === 'cream' ? 'text-bronze-700 hover:bg-cream-200' : 'text-baseBlue-300 hover:bg-baseBlack-700'}`}
-            >
-              NFT MultiSender
-            </button>
+            <div className="relative">
+              <button 
+                onClick={() => handleNavigate('multisender')}
+                className={`w-full text-left px-4 py-3 rounded-2xl transition-all duration-200 hover:scale-105 ${currentPage === 'multisender' 
+                  ? theme === 'cream' ? 'bg-bronze-500 text-cream-50' : 'bg-baseBlue-600 text-white'
+                  : theme === 'cream' ? 'text-bronze-700 hover:bg-cream-200' : 'text-baseBlue-300 hover:bg-baseBlack-700'}`}
+              >
+                NFT MultiSender
+              </button>
+              {/* BETA Badge */}
+              <span className={`absolute -top-1 -right-1 px-1.5 py-0.5 text-xs font-bold rounded-full transition-all duration-200 ${theme === 'cream' 
+                ? 'bg-orange-500/70 text-white backdrop-blur-sm' 
+                : 'bg-orange-600/70 text-white backdrop-blur-sm'} shadow-sm border border-white/20`}>
+                BETA
+              </span>
+            </div>
             <button 
               onClick={() => handleNavigate('revoke')}
               className={`w-full text-left px-4 py-3 rounded-2xl transition-all duration-200 hover:scale-105 ${currentPage === 'revoke' 
